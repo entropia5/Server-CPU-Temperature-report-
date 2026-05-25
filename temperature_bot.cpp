@@ -12,9 +12,9 @@ std::string BOT_TOKEN;
 std::string CHAT_ID;
 
 
-const float TEMP_ALARM = 46.0f;
-const float TEMP_NORMAL = 44.0f;
-const auto REPORT_INTERVAL = std::chrono::hours(3);
+const float TEMP_ALARM = 50.0f;
+const float TEMP_NORMAL = 50.0f;
+const auto REPORT_INTERVAL = std::chrono::hours(12);
 
 //Фун-ции
 
@@ -102,7 +102,7 @@ int main() {
     std::cout << "Temperature monitoring:" << std::endl;
     std::cout << "Alarm temp: " << TEMP_ALARM << "°C" << std::endl;
     std::cout << "Normal temp: " << TEMP_NORMAL << "°C" << std::endl;
-    std::cout << "Report interval: 3 hours" << std::endl;
+    std::cout << "Report interval: 12 hours" << std::endl;
     std::cout << "Monitoring started..." << std::endl;
 
     while (true) {
@@ -115,14 +115,14 @@ int main() {
         auto now = std::chrono::steady_clock::now();
         bool needSend = false;
 
-        if (temp >= TEMP_ALARM) {
+        if (temp > TEMP_ALARM) {
             if (!isOverheated) {
                 isOverheated = true;
                 needSend = true;
                 std::cout << "🔴 ALERT: Temperature " << temp << "°C" << std::endl;
             }
         }
-        else {
+        else if (temp <= TEMP_NORMAL) {
             if (isOverheated) {
                 isOverheated = false;
                 needSend = true;

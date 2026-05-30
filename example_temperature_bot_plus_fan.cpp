@@ -7,12 +7,14 @@
 #include <sstream>
 #include <iomanip>
 #include <cstdlib>
+#include <regex>
 
 const std::string BOT_TOKEN = "BOT_TOKEN";
 const std::string CHAT_ID = "CHAT_ID";
 
 const float TEMP_ALARM = 50.0f;
 const float TEMP_NORMAL = 40.0f;
+const auto REPORT_INTERVAL = std::chrono::minutes(5);
 
 const std::string ESP32_IP = "ESP32_IP";
 
@@ -39,6 +41,68 @@ bool sendTelegramMessage(const std::string& text) {
 
     std::string url = "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage";
     std::string postFields = "chat_id=" + CHAT_ID + "&parse_mode=MarkdownV2&text=" + text;
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postFields.c_str());
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    return (res == CURLE_OK);
+}
+
+size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+    const size_t total = size * nmemb;
+    static_cast<std::string*>(userp)->append(static_cast<char*>(contents), total);
+    return total;
+}
+
+long extractMessageId(const std::string& response) {
+    std::regex re("\"message_id\"\\s*:\\s*(\\d+)");
+    std::smatch match;
+    if (std::regex_search(response, match, re) && match.size() > 1) {
+        return std::stol(match[1].str());
+    }
+    return -1;
+}
+
+bool sendTelegramMessageAndGetId(const std::string& text, long& messageId) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+
+    std::string response;
+    std::string url = "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage";
+    std::string postFields = "chat_id=" + CHAT_ID + "&parse_mode=MarkdownV2&text=" + text;
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postFields.c_str());
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) return false;
+
+    long parsedId = extractMessageId(response);
+    if (parsedId < 0) return false;
+
+    messageId = parsedId;
+    return true;
+}
+
+bool editTelegramMessage(long messageId, const std::string& text) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+
+    std::string url = "https://api.telegram.org/bot" + BOT_TOKEN + "/editMessageText";
+    std::string postFields =
+        "chat_id=" + CHAT_ID +
+        "&message_id=" + std::to_string(messageId) +
+        "&parse_mode=MarkdownV2&text=" + text;
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postFields.c_str());
@@ -86,7 +150,8 @@ std::string buildFancyReport(float temp, int fanSpeed) {
 
 int main() {
     bool isOverheated = false;
-    auto lastReportTime = std::chrono::steady_clock::now() - std::chrono::hours(6);
+    long persistentMessageId = -1;
+    auto lastReportTime = std::chrono::steady_clock::now() - REPORT_INTERVAL;
     int lastFanSpeed = -1;
 
     std::cout << "Temperature Monitor + Fan Control" << std::endl;
@@ -139,12 +204,32 @@ int main() {
         }
 
         if (needSend) {
-            sendTelegramMessage(buildFancyReport(temp, targetFanSpeed));
-        }
-        else {
-            auto elapsed = std::chrono::duration_cast<std::chrono::hours>(now - lastReportTime).count();
-            if (elapsed >= 6) {
-                sendTelegramMessage(buildFancyReport(temp, targetFanSpeed));
+            const std::string report = buildFancyReport(temp, targetFanSpeed);
+            if (persistentMessageId < 0) {
+                if (!sendTelegramMessageAndGetId(report, persistentMessageId)) {
+                    std::cout << "Failed to create Telegram window" << std::endl;
+                }
+            } else if (!editTelegramMessage(persistentMessageId, report)) {
+                std::cout << "Failed to update Telegram window, creating a new one..." << std::endl;
+                if (!sendTelegramMessageAndGetId(report, persistentMessageId)) {
+                    std::cout << "Failed to create fallback Telegram window" << std::endl;
+                }
+            }
+            lastReportTime = now;
+        } else {
+            auto elapsed = std::chrono::duration_cast<std::chrono::minutes>(now - lastReportTime);
+            if (elapsed >= REPORT_INTERVAL) {
+                const std::string report = buildFancyReport(temp, targetFanSpeed);
+                if (persistentMessageId < 0) {
+                    if (!sendTelegramMessageAndGetId(report, persistentMessageId)) {
+                        std::cout << "Failed to create Telegram window" << std::endl;
+                    }
+                } else if (!editTelegramMessage(persistentMessageId, report)) {
+                    std::cout << "Failed to update Telegram window, creating a new one..." << std::endl;
+                    if (!sendTelegramMessageAndGetId(report, persistentMessageId)) {
+                        std::cout << "Failed to create fallback Telegram window" << std::endl;
+                    }
+                }
                 lastReportTime = now;
             }
         }

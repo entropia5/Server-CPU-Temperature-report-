@@ -5,4 +5,7 @@
 #исполняемый файл
 temperature_bot
 
-
+#runtime state
+bot_state.json
+bot_state.json.tmp
+runtime/

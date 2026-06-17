@@ -1,23 +1,51 @@
 # TemperatureBot
 
-A small C++ temperature monitor for Raspberry Pi and Linux boards.
-It reads the CPU temperature from `/sys/class/thermal/thermal_zone0/temp`
-and sends Telegram notifications.
+TemperatureBot is a small C++17 Telegram bot for Raspberry Pi and Linux boards.
+It reads CPU temperature from `/sys/class/thermal/thermal_zone0/temp`, renders a
+dark graphite HTML/CSS dashboard image, and keeps one live Telegram screen
+updated without chat spam.
+
+![TemperatureBot dashboard](assets/screenshots/temperature_dashboard.jpg)
 
 ## Features
 
-- Sends CPU temperature reports to Telegram
-- Sends an alert when the CPU temperature is higher than `50.0 C`
-- Marks the temperature as normal again at `50.0 C` or lower
-- Sends regular status reports every 12 hours
-- Checks the temperature every 30 seconds
-- Uses a local `.env` file for Telegram credentials
+- Live Telegram dashboard rendered as a JPEG image from HTML/CSS
+- Dark graphite UI with color-coded temperature
+- Companion text status message without duplicated temperature numbers
+- No-spam updates through `editMessageMedia` and `editMessageText`
+- Persistent `bot_state.json` so the bot can reuse live message IDs after restart
+- `/start` command triggers a self-restart through `execv`
+- Runtime render files are cleaned after upload
+- Optional systemd service deployment
+
+## Temperature States
+
+The thresholds are defined in `temperature_bot.cpp`:
+
+```cpp
+const float TEMP_WARNING = 45.0f;
+const float TEMP_ALARM = 50.0f;
+const auto REPORT_INTERVAL = std::chrono::minutes(5);
+const auto ELEVATED_REPORT_INTERVAL = std::chrono::seconds(15);
+const auto SENSOR_INTERVAL = std::chrono::seconds(15);
+```
+
+Behavior:
+
+- below `45.0 C`: green, `Температура в пределах нормы.`
+- `45.0 C` to `49.9 C`: yellow, `Температура повысилась.`
+- `50.0 C` and higher: red, `Внимание. Перегрев ЦПУ.`
+- state changes are sent immediately
+- normal update interval: every 5 minutes
+- elevated/high update interval: every 15 seconds
+- sensor check interval: every 15 seconds
 
 ## Requirements
 
 - Linux with `/sys/class/thermal/thermal_zone0/temp`
 - C++17 compiler
 - libcurl development package
+- `wkhtmltoimage`
 - Telegram bot token
 - Telegram chat ID
 
@@ -25,39 +53,49 @@ On Raspberry Pi OS or Debian/Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install g++ libcurl4-openssl-dev
+sudo apt install g++ make libcurl4-openssl-dev wkhtmltopdf
 ```
 
 ## Telegram Setup
 
-1. Create a Telegram bot with `@BotFather`.
+1. Create a bot with `@BotFather`.
 2. Copy the bot token.
 3. Send any message to your bot.
-4. Get your chat ID.
-
-One common way to get the chat ID:
+4. Get your chat ID:
 
 ```bash
 curl "https://api.telegram.org/botYOUR_BOT_TOKEN/getUpdates"
 ```
 
-Look for the `chat.id` value in the response.
+Look for `message.chat.id` in the response.
 
 ## Configuration
 
-Create a `.env` file in the project directory:
+Copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
 
 ```env
 BOT_TOKEN=your_telegram_bot_token
-CHAT_ID=your_chat_id
+CHAT_ID=your_telegram_chat_id
 ```
 
-Do not commit `.env` to GitHub because it contains secrets.
+Never commit `.env`. It contains secrets.
 
 ## Build
 
 ```bash
-g++ -std=c++17 temperature_bot.cpp -lcurl -pthread -o temperature_bot
+make
+```
+
+Equivalent manual command:
+
+```bash
+g++ -std=c++17 -Wall -Wextra -O2 temperature_bot.cpp -lcurl -pthread -o temperature_bot
 ```
 
 ## Run
@@ -66,76 +104,63 @@ g++ -std=c++17 temperature_bot.cpp -lcurl -pthread -o temperature_bot
 ./temperature_bot
 ```
 
-The program prints basic status information to the console and sends
-Telegram messages when needed.
+The bot creates or updates a Telegram live dashboard and a companion status
+text message. It stores runtime Telegram message IDs in `bot_state.json`.
 
-## Current Thresholds
+## Self-Restart
 
-The current settings are defined in `temperature_bot.cpp`:
+Send `/start` to the bot from the configured `CHAT_ID`.
 
-```cpp
-const float TEMP_ALARM = 50.0f;
-const float TEMP_NORMAL = 50.0f;
-const auto REPORT_INTERVAL = std::chrono::hours(12);
+The bot stores the latest Telegram update id, then replaces its own process with
+`execv(argv[0], argv)`. This reloads the binary from disk without calling
+`systemctl restart`.
+
+Systemd is still useful as a safety net if the process crashes or cannot read
+Telegram updates.
+
+## systemd
+
+An example unit is available at:
+
+```text
+deploy/systemd/bot-temperature.service.example
 ```
 
-Behavior:
-
-- `50.0 C` and lower: normal
-- Higher than `50.0 C`: alert
-- Regular report: every 12 hours
-
-## Run as a systemd Service
-
-Create a service file:
+Copy and edit it for your machine:
 
 ```bash
-sudo nano /etc/systemd/system/temperature-bot.service
-```
-
-Example service:
-
-```ini
-[Unit]
-Description=TemperatureBot CPU temperature Telegram monitor
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/home/pi/TemperatureBot
-ExecStart=/home/pi/TemperatureBot/temperature_bot
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Update `WorkingDirectory` and `ExecStart` if your project is in a different
-directory.
-
-Enable and start the service:
-
-```bash
+sudo cp deploy/systemd/bot-temperature.service.example /etc/systemd/system/bot-temperature.service
+sudo nano /etc/systemd/system/bot-temperature.service
 sudo systemctl daemon-reload
-sudo systemctl enable temperature-bot
-sudo systemctl start temperature-bot
+sudo systemctl enable bot-temperature
+sudo systemctl start bot-temperature
 ```
 
 Check logs:
 
 ```bash
-journalctl -u temperature-bot -f
+journalctl -u bot-temperature -f
 ```
 
-## Files
+## Runtime Files
 
-- `temperature_bot.cpp` - main Telegram temperature monitor
-- `example_temperature_bot_plus_fan.cpp` - example version with fan control logic
+These files are generated locally and should not be committed:
 
-## Notes
+- `.env`
+- `temperature_bot`
+- `bot_state.json`
+- `bot_state.json.tmp`
+- `runtime/`
 
-- The first report is sent immediately after startup.
-- Telegram messages use MarkdownV2 escaping.
-- If the temperature file cannot be read, the program waits 5 seconds and tries again.
+## Repository Files
+
+- `temperature_bot.cpp` - main bot source
+- `.env.example` - environment template
+- `Makefile` - local build helper
+- `assets/screenshots/temperature_dashboard.jpg` - README preview image
+- `deploy/systemd/bot-temperature.service.example` - systemd template
+- `example_temperature_bot_plus_fan.cpp` - experimental fan-control example
+
+## License
+
+MIT

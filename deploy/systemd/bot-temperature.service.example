@@ -1,0 +1,15 @@
+[Unit]
+Description=TemperatureBot CPU temperature Telegram monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/TemperatureBot
+ExecStart=/opt/TemperatureBot/temperature_bot
+Restart=always
+RestartSec=10
+User=temperaturebot
+
+[Install]
+WantedBy=multi-user.target

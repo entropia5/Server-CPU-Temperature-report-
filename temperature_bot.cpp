@@ -597,7 +597,7 @@ std::string buildDashboardHtml(float temp) {
          << ".unit{font-size:46px;line-height:1;font-weight:800;color:#c9d2dc;padding-bottom:10px;}\n"
          << "</style></head><body>\n"
          << "<div class=\"wrap\"><div class=\"panel\">\n"
-         << "<div class=\"top\"><div><div class=\"title\">Server CPU Temperature</div><div class=\"subtitle\">Live thermal monitor</div></div><div class=\"badge " << cls << "\">" << label << "</div></div>\n"
+         << "<div class=\"top\"><div><div class=\"title\">Server CPU Temperature</div><div class=\"subtitle\">by entropia5</div></div><div class=\"badge " << cls << "\">" << label << "</div></div>\n"
          << "<div class=\"temp\"><div class=\"num " << cls << "\">" << value.str() << "</div><div class=\"unit\">°C</div></div>\n"
          << "</div></div></body></html>\n";
 

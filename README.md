@@ -5,7 +5,17 @@ It reads CPU temperature from `/sys/class/thermal/thermal_zone0/temp`, renders a
 dark graphite HTML/CSS dashboard image, and keeps one live Telegram screen
 updated without chat spam.
 
-![TemperatureBot dashboard](assets/screenshots/temperature_dashboard.jpg)
+![TemperatureBot normal state](assets/normal.png)
+
+## Screenshots
+
+### Elevated
+
+![TemperatureBot elevated state](assets/screenshots/alarm2.png)
+
+### High
+
+![TemperatureBot high temperature state](assets/screenshots/alarm1.png)
 
 ## Features
 
@@ -157,7 +167,9 @@ These files are generated locally and should not be committed:
 - `temperature_bot.cpp` - main bot source
 - `.env.example` - environment template
 - `Makefile` - local build helper
-- `assets/screenshots/temperature_dashboard.jpg` - README preview image
+- `assets/normal.png` - normal temperature preview
+- `assets/screenshots/alarm2.png` - elevated temperature preview
+- `assets/screenshots/alarm1.png` - high temperature preview
 - `deploy/systemd/bot-temperature.service.example` - systemd template
 - `example_temperature_bot_plus_fan.cpp` - experimental fan-control example
 

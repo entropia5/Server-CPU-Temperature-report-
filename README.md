@@ -5,17 +5,21 @@ It reads CPU temperature from `/sys/class/thermal/thermal_zone0/temp`, renders a
 dark graphite HTML/CSS dashboard image, and keeps one live Telegram screen
 updated without chat spam.
 
-![TemperatureBot normal state](assets/normal.png)
+![TemperatureBot normal state](assets/screenshots/normal_en.png)
 
 ## Screenshots
 
+### Language Selection
+
+![TemperatureBot language selection](assets/screenshots/choose_lan.png)
+
 ### Elevated
 
-![TemperatureBot elevated state](assets/screenshots/alarm2.png)
+![TemperatureBot elevated state](assets/screenshots/alarm1_en.png)
 
 ### High
 
-![TemperatureBot high temperature state](assets/screenshots/alarm1.png)
+![TemperatureBot high temperature state](assets/screenshots/alarm2_en.png)
 
 ## Features
 
@@ -24,7 +28,8 @@ updated without chat spam.
 - Companion text status message without duplicated temperature numbers
 - No-spam updates through `editMessageMedia` and `editMessageText`
 - Persistent `bot_state.json` so the bot can reuse live message IDs after restart
-- `/start` command triggers a self-restart through `execv`
+- `/start` opens an inline Russian/English language selector
+- Language choice is saved in `bot_state.json`
 - Runtime render files are cleaned after upload
 - Optional systemd service deployment
 
@@ -42,9 +47,9 @@ const auto SENSOR_INTERVAL = std::chrono::seconds(15);
 
 Behavior:
 
-- below `45.0 C`: green, `Температура в пределах нормы.`
-- `45.0 C` to `49.9 C`: yellow, `Температура повысилась.`
-- `50.0 C` and higher: red, `Внимание. Перегрев ЦПУ.`
+- below `45.0 C`: green, normal status text
+- `45.0 C` to `49.9 C`: yellow, elevated status text
+- `50.0 C` and higher: red, overheating status text
 - state changes are sent immediately
 - normal update interval: every 5 minutes
 - elevated/high update interval: every 15 seconds
@@ -115,15 +120,17 @@ g++ -std=c++17 -Wall -Wextra -O2 temperature_bot.cpp -lcurl -pthread -o temperat
 ```
 
 The bot creates or updates a Telegram live dashboard and a companion status
-text message. It stores runtime Telegram message IDs in `bot_state.json`.
+text message. It stores runtime Telegram message IDs and the selected language
+in `bot_state.json`.
 
-## Self-Restart
+## Language Selection
 
 Send `/start` to the bot from the configured `CHAT_ID`.
 
-The bot stores the latest Telegram update id, then replaces its own process with
-`execv(argv[0], argv)`. This reloads the binary from disk without calling
-`systemctl restart`.
+The bot deletes its tracked live dashboard, status text, and previous language
+prompt if they are still available, then sends an inline language selector.
+After you choose Russian or English, the selector is deleted and a fresh live
+dashboard is created in the selected language.
 
 Systemd is still useful as a safety net if the process crashes or cannot read
 Telegram updates.
@@ -167,9 +174,10 @@ These files are generated locally and should not be committed:
 - `temperature_bot.cpp` - main bot source
 - `.env.example` - environment template
 - `Makefile` - local build helper
-- `assets/normal.png` - normal temperature preview
-- `assets/screenshots/alarm2.png` - elevated temperature preview
-- `assets/screenshots/alarm1.png` - high temperature preview
+- `assets/screenshots/normal_en.png` - normal temperature preview
+- `assets/screenshots/choose_lan.png` - language selection preview
+- `assets/screenshots/alarm1_en.png` - elevated temperature preview
+- `assets/screenshots/alarm2_en.png` - high temperature preview
 - `deploy/systemd/bot-temperature.service.example` - systemd template
 - `example_temperature_bot_plus_fan.cpp` - experimental fan-control example
 

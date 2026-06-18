@@ -15,7 +15,6 @@
 #include <iterator>
 #include <ctime>
 #include <vector>
-#include <unistd.h>
 #include <cstdlib>
 #include <sys/stat.h>
 
@@ -40,6 +39,7 @@ const std::string DASHBOARD_IMAGE_TMP_FILE = RENDER_DIR + "/temperature_dashboar
 struct ChatBotState {
     long live_dashboard_message_id = -1;
     long last_alert_text_message_id = -1;
+    long language_prompt_message_id = -1;
     std::string language;
 };
 
@@ -77,6 +77,8 @@ enum class TemperatureState {
 };
 
 BotState g_botState;
+
+ChatBotState& currentChatState();
 
 std::string escape(const std::string& text) {
     std::string out;
@@ -316,6 +318,18 @@ std::string extractStringField(const std::string& object, const std::string& nam
     return "";
 }
 
+std::string normalizeLanguage(const std::string& language) {
+    return language == "en" ? "en" : "ru";
+}
+
+std::string currentLanguage() {
+    return normalizeLanguage(currentChatState().language);
+}
+
+bool isEnglishLanguage() {
+    return currentLanguage() == "en";
+}
+
 std::vector<std::pair<long, std::string>> extractUpdateSlices(const std::string& response) {
     std::vector<std::pair<long, std::string>> updates;
     std::regex updateIdRe("\"update_id\"\\s*:\\s*(\\d+)");
@@ -386,6 +400,7 @@ void loadBotStateFromFile() {
         ChatBotState chatState;
         extractLongField(object, "live_dashboard_message_id", chatState.live_dashboard_message_id);
         extractLongField(object, "last_alert_text_message_id", chatState.last_alert_text_message_id);
+        extractLongField(object, "language_prompt_message_id", chatState.language_prompt_message_id);
         chatState.language = extractStringField(object, "language");
         g_botState.chats[chatId] = chatState;
         ++loaded;
@@ -413,6 +428,7 @@ bool saveBotStateToFile() {
         file << "    \"" << jsonEscape(entry.first) << "\": {\n"
              << "      \"live_dashboard_message_id\": " << entry.second.live_dashboard_message_id << ",\n"
              << "      \"last_alert_text_message_id\": " << entry.second.last_alert_text_message_id << ",\n"
+             << "      \"language_prompt_message_id\": " << entry.second.language_prompt_message_id << ",\n"
              << "      \"language\": \"" << jsonEscape(entry.second.language) << "\"\n"
              << "    }";
     }
@@ -436,73 +452,6 @@ bool saveBotStateToFile() {
 
 ChatBotState& currentChatState() {
     return g_botState.chats[CHAT_ID];
-}
-
-TelegramApiResult getTelegramUpdates(long offset, int limit = 10) {
-    return callTelegramApi("getUpdates", {
-        {"offset", std::to_string(offset)},
-        {"limit", std::to_string(limit)},
-        {"timeout", "0"},
-        {"allowed_updates", "[\"message\"]"}
-    });
-}
-
-void syncTelegramUpdatesOffsetOnFirstRun() {
-    if (g_botState.last_update_id >= 0) return;
-
-    TelegramApiResult result = getTelegramUpdates(-1, 1);
-    if (!telegramApiOk(result)) {
-        logTelegramFailure("getUpdates(initial sync)", result);
-        return;
-    }
-
-    long maxUpdateId = -1;
-    for (const auto& update : extractUpdateSlices(result.response)) {
-        maxUpdateId = std::max(maxUpdateId, update.first);
-    }
-
-    g_botState.last_update_id = maxUpdateId;
-    saveBotStateToFile();
-    std::cout << "Telegram update offset initialized. last_update_id="
-              << g_botState.last_update_id << std::endl;
-}
-
-bool pollStartCommand() {
-    const long offset = (g_botState.last_update_id >= 0) ? g_botState.last_update_id + 1 : 0;
-    TelegramApiResult result = getTelegramUpdates(offset);
-    if (!telegramApiOk(result)) {
-        logTelegramFailure("getUpdates", result);
-        return false;
-    }
-
-    const auto updates = extractUpdateSlices(result.response);
-    if (updates.empty()) return false;
-
-    long maxUpdateId = g_botState.last_update_id;
-    bool restartRequested = false;
-    for (const auto& update : updates) {
-        maxUpdateId = std::max(maxUpdateId, update.first);
-        if (updateIsStartCommandForConfiguredChat(update.second)) {
-            restartRequested = true;
-        }
-    }
-
-    if (maxUpdateId > g_botState.last_update_id) {
-        g_botState.last_update_id = maxUpdateId;
-        saveBotStateToFile();
-    }
-
-    if (restartRequested) {
-        std::cout << "/start received from configured chat. Self-restart requested." << std::endl;
-    }
-
-    return restartRequested;
-}
-
-void selfRestart(char* argv[]) {
-    std::cout << "Restarting process via execv: " << argv[0] << std::endl;
-    execv(argv[0], argv);
-    std::cerr << "execv failed, process continues with current binary" << std::endl;
 }
 
 bool ensureRenderDir() {
@@ -538,9 +487,15 @@ std::string temperatureClass(float temp) {
 }
 
 std::string temperatureLabel(float temp) {
-    if (temp >= TEMP_ALARM) return "HIGH";
-    if (temp >= TEMP_WARNING) return "ELEVATED";
-    return "NORMAL";
+    if (isEnglishLanguage()) {
+        if (temp >= TEMP_ALARM) return "HIGH";
+        if (temp >= TEMP_WARNING) return "ELEVATED";
+        return "NORMAL";
+    }
+
+    if (temp >= TEMP_ALARM) return "ВЫСОКАЯ";
+    if (temp >= TEMP_WARNING) return "ПОВЫШЕНА";
+    return "НОРМА";
 }
 
 std::string temperatureColorName(float temp) {
@@ -575,6 +530,7 @@ std::chrono::steady_clock::duration reportIntervalForState(TemperatureState stat
 std::string buildDashboardHtml(float temp) {
     const std::string cls = temperatureClass(temp);
     const std::string label = temperatureLabel(temp);
+    const std::string title = isEnglishLanguage() ? "Server CPU Temperature" : "Температура CPU сервера";
 
     std::ostringstream value;
     value << std::fixed << std::setprecision(1) << temp;
@@ -597,7 +553,7 @@ std::string buildDashboardHtml(float temp) {
          << ".unit{font-size:46px;line-height:1;font-weight:800;color:#c9d2dc;padding-bottom:10px;}\n"
          << "</style></head><body>\n"
          << "<div class=\"wrap\"><div class=\"panel\">\n"
-         << "<div class=\"top\"><div><div class=\"title\">Server CPU Temperature</div><div class=\"subtitle\">by entropia5</div></div><div class=\"badge " << cls << "\">" << label << "</div></div>\n"
+         << "<div class=\"top\"><div><div class=\"title\">" << htmlEscape(title) << "</div><div class=\"subtitle\">by entropia5</div></div><div class=\"badge " << cls << "\">" << htmlEscape(label) << "</div></div>\n"
          << "<div class=\"temp\"><div class=\"num " << cls << "\">" << value.str() << "</div><div class=\"unit\">°C</div></div>\n"
          << "</div></div></body></html>\n";
 
@@ -699,6 +655,39 @@ bool sendTelegramTextAndGetId(const std::string& text, long& messageId) {
     return true;
 }
 
+bool sendTelegramTextWithMarkupAndGetId(
+    const std::string& text,
+    const std::string& replyMarkup,
+    long& messageId
+) {
+    TelegramApiResult result = callTelegramApi("sendMessage", {
+        {"chat_id", CHAT_ID},
+        {"text", text},
+        {"reply_markup", replyMarkup},
+        {"disable_notification", "true"}
+    });
+
+    if (!telegramApiOk(result) || result.messageId < 0) {
+        logTelegramFailure("sendMessage(language prompt)", result);
+        return false;
+    }
+
+    messageId = result.messageId;
+    return true;
+}
+
+void answerCallbackQuery(const std::string& callbackQueryId) {
+    if (callbackQueryId.empty()) return;
+
+    TelegramApiResult result = callTelegramApi("answerCallbackQuery", {
+        {"callback_query_id", callbackQueryId}
+    });
+
+    if (!telegramApiOk(result)) {
+        logTelegramFailure("answerCallbackQuery", result);
+    }
+}
+
 EditOutcome editTelegramText(long messageId, const std::string& text) {
     TelegramApiResult result = callTelegramApi("editMessageText", {
         {"chat_id", CHAT_ID},
@@ -721,14 +710,20 @@ EditOutcome editTelegramText(long messageId, const std::string& text) {
 }
 
 std::string buildTemperatureStatusText(float temp) {
-    if (temp >= TEMP_ALARM) {
-        return "Внимание. Перегрев ЦПУ.";
+    if (isEnglishLanguage()) {
+        if (temp >= TEMP_ALARM) {
+            return "Warning. CPU overheating.";
+        }
+
+        if (temp >= TEMP_WARNING) {
+            return "Temperature is elevated.";
+        }
+
+        return "Temperature is within normal range.";
     }
 
-    if (temp >= TEMP_WARNING) {
-        return "Повышенная температура.";
-    }
-
+    if (temp >= TEMP_ALARM) return "Внимание. Перегрев ЦПУ.";
+    if (temp >= TEMP_WARNING) return "Повышенная температура.";
     return "Температура в пределах нормы.";
 }
 
@@ -752,17 +747,31 @@ DeleteOutcome deleteTelegramMessage(long messageId, const std::string& label) {
     return DeleteOutcome::TransientFailure;
 }
 
-void deleteStoredHelperMessageIfAny() {
-    ChatBotState& chatState = currentChatState();
-    if (chatState.last_alert_text_message_id < 0) return;
+void deleteStoredMessageIfAny(long& messageId, const std::string& label) {
+    if (messageId < 0) return;
 
-    const long messageId = chatState.last_alert_text_message_id;
-    DeleteOutcome result = deleteTelegramMessage(messageId, "helper message");
+    const long oldMessageId = messageId;
+    DeleteOutcome result = deleteTelegramMessage(oldMessageId, label);
 
     if (result == DeleteOutcome::Success || result == DeleteOutcome::PermanentFailure) {
-        chatState.last_alert_text_message_id = -1;
+        messageId = -1;
         saveBotStateToFile();
     }
+}
+
+void deleteTrackedBotMessagesForLanguageFlow(bool includeLanguagePrompt) {
+    ChatBotState& chatState = currentChatState();
+    deleteStoredMessageIfAny(chatState.live_dashboard_message_id, "live dashboard");
+    deleteStoredMessageIfAny(chatState.last_alert_text_message_id, "status text");
+
+    if (includeLanguagePrompt) {
+        deleteStoredMessageIfAny(chatState.language_prompt_message_id, "language prompt");
+    }
+}
+
+void deleteStoredHelperMessageIfAny() {
+    ChatBotState& chatState = currentChatState();
+    deleteStoredMessageIfAny(chatState.last_alert_text_message_id, "helper message");
 }
 
 bool upsertLiveDashboardPhoto(const std::string& imagePath, bool freshLiveOnStartup = false) {
@@ -871,6 +880,158 @@ bool publishTemperatureDashboard(float temp, bool freshLiveOnStartup) {
     return photoOk;
 }
 
+bool languageSelectionPending() {
+    return currentChatState().language_prompt_message_id >= 0;
+}
+
+std::string buildLanguageSelectionReplyMarkup() {
+    return R"({"inline_keyboard":[[{"text":"Русский","callback_data":"lang:ru"}],[{"text":"English","callback_data":"lang:en"}]]})";
+}
+
+bool sendLanguageSelectionPrompt() {
+    long messageId = -1;
+    if (!sendTelegramTextWithMarkupAndGetId(
+            "Выберите язык / Choose language",
+            buildLanguageSelectionReplyMarkup(),
+            messageId
+        )) {
+        return false;
+    }
+
+    ChatBotState& chatState = currentChatState();
+    chatState.language_prompt_message_id = messageId;
+    saveBotStateToFile();
+    std::cout << "Language prompt created. message_id=" << messageId << std::endl;
+    return true;
+}
+
+void handleStartCommand(const std::string& updateSlice) {
+    long startMessageId = -1;
+    extractLongField(updateSlice, "message_id", startMessageId);
+
+    std::cout << "/start received from configured chat. Showing language prompt." << std::endl;
+    deleteTrackedBotMessagesForLanguageFlow(true);
+    sendLanguageSelectionPrompt();
+
+    if (startMessageId >= 0) {
+        deleteTelegramMessage(startMessageId, "start command");
+    }
+}
+
+std::string extractCallbackQueryId(const std::string& updateSlice) {
+    std::regex re("\"callback_query\"\\s*:\\s*\\{\\s*\"id\"\\s*:\\s*\"([^\"]+)\"");
+    std::smatch match;
+    if (std::regex_search(updateSlice, match, re) && match.size() > 1) {
+        return match[1].str();
+    }
+
+    return "";
+}
+
+std::string extractCallbackData(const std::string& updateSlice) {
+    return extractStringField(updateSlice, "data");
+}
+
+bool updateBelongsToConfiguredChat(const std::string& updateSlice) {
+    const std::vector<long> ids = extractLongFields(updateSlice, "id");
+    const long configuredChatId = std::stol(CHAT_ID);
+    return std::find(ids.begin(), ids.end(), configuredChatId) != ids.end();
+}
+
+bool handleLanguageCallback(const std::string& updateSlice) {
+    if (!updateBelongsToConfiguredChat(updateSlice)) return false;
+
+    const std::string callbackData = extractCallbackData(updateSlice);
+    if (callbackData != "lang:ru" && callbackData != "lang:en") return false;
+
+    answerCallbackQuery(extractCallbackQueryId(updateSlice));
+
+    long callbackMessageId = -1;
+    extractLongField(updateSlice, "message_id", callbackMessageId);
+
+    ChatBotState& chatState = currentChatState();
+    if (callbackMessageId >= 0) {
+        chatState.language_prompt_message_id = callbackMessageId;
+    }
+    chatState.language = (callbackData == "lang:en") ? "en" : "ru";
+    saveBotStateToFile();
+
+    std::cout << "Language selected: " << chatState.language << std::endl;
+    deleteTrackedBotMessagesForLanguageFlow(true);
+    if (chatState.language_prompt_message_id >= 0) {
+        chatState.language_prompt_message_id = -1;
+        saveBotStateToFile();
+    }
+    return true;
+}
+
+struct PollResult {
+    bool publishFreshDashboard = false;
+};
+
+TelegramApiResult getTelegramUpdates(long offset, int limit = 10) {
+    return callTelegramApi("getUpdates", {
+        {"offset", std::to_string(offset)},
+        {"limit", std::to_string(limit)},
+        {"timeout", "0"},
+        {"allowed_updates", "[\"message\",\"callback_query\"]"}
+    });
+}
+
+void syncTelegramUpdatesOffsetOnFirstRun() {
+    if (g_botState.last_update_id >= 0) return;
+
+    TelegramApiResult result = getTelegramUpdates(-1, 1);
+    if (!telegramApiOk(result)) {
+        logTelegramFailure("getUpdates(initial sync)", result);
+        return;
+    }
+
+    long maxUpdateId = -1;
+    for (const auto& update : extractUpdateSlices(result.response)) {
+        maxUpdateId = std::max(maxUpdateId, update.first);
+    }
+
+    g_botState.last_update_id = maxUpdateId;
+    saveBotStateToFile();
+    std::cout << "Telegram update offset initialized. last_update_id="
+              << g_botState.last_update_id << std::endl;
+}
+
+PollResult pollTelegramUpdates() {
+    PollResult pollResult;
+    const long offset = (g_botState.last_update_id >= 0) ? g_botState.last_update_id + 1 : 0;
+    TelegramApiResult result = getTelegramUpdates(offset);
+    if (!telegramApiOk(result)) {
+        logTelegramFailure("getUpdates", result);
+        return pollResult;
+    }
+
+    const auto updates = extractUpdateSlices(result.response);
+    if (updates.empty()) return pollResult;
+
+    long maxUpdateId = g_botState.last_update_id;
+    for (const auto& update : updates) {
+        maxUpdateId = std::max(maxUpdateId, update.first);
+
+        if (updateIsStartCommandForConfiguredChat(update.second)) {
+            handleStartCommand(update.second);
+            continue;
+        }
+
+        if (handleLanguageCallback(update.second)) {
+            pollResult.publishFreshDashboard = true;
+        }
+    }
+
+    if (maxUpdateId > g_botState.last_update_id) {
+        g_botState.last_update_id = maxUpdateId;
+        saveBotStateToFile();
+    }
+
+    return pollResult;
+}
+
 //фу-ция загрузки дял .env
 void loadEnv(const std::string& filename = ".env") {
     std::ifstream file(filename);
@@ -894,10 +1055,8 @@ void loadEnv(const std::string& filename = ".env") {
 }
 
 
-int main(int argc, char* argv[]) {
-    (void)argc;
-
-       loadEnv();
+int main() {
+    loadEnv();
 
     if (BOT_TOKEN.empty() || CHAT_ID.empty()) {
         std::cerr << "Missing BOT_TOKEN or CHAT_ID in .env" << std::endl;
@@ -909,6 +1068,7 @@ int main(int argc, char* argv[]) {
     syncTelegramUpdatesOffsetOnFirstRun();
 
     bool freshLiveOnStartup = true;
+    bool publishFreshDashboardNow = false;
     TemperatureState lastPublishedState = TemperatureState::Unknown;
     auto lastReportTime = std::chrono::steady_clock::now() - REPORT_INTERVAL;
 
@@ -921,8 +1081,14 @@ int main(int argc, char* argv[]) {
     std::cout << "Monitoring started..." << std::endl;
 
     while (true) {
-        if (pollStartCommand()) {
-            selfRestart(argv);
+        PollResult pollResult = pollTelegramUpdates();
+        if (pollResult.publishFreshDashboard) {
+            publishFreshDashboardNow = true;
+        }
+
+        if (languageSelectionPending()) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
         }
 
         float temp = getCPUTemperature();
@@ -942,9 +1108,10 @@ int main(int argc, char* argv[]) {
                       << ": " << temp << "°C" << std::endl;
         }
 
-        if (stateChanged || intervalElapsed) {
-            if (publishTemperatureDashboard(temp, freshLiveOnStartup)) {
+        if (publishFreshDashboardNow || stateChanged || intervalElapsed) {
+            if (publishTemperatureDashboard(temp, freshLiveOnStartup || publishFreshDashboardNow)) {
                 freshLiveOnStartup = false;
+                publishFreshDashboardNow = false;
                 lastPublishedState = currentState;
                 lastReportTime = now;
             }
@@ -958,8 +1125,14 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < SENSOR_INTERVAL.count(); ++i) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
-            if (pollStartCommand()) {
-                selfRestart(argv);
+            PollResult sleepPollResult = pollTelegramUpdates();
+            if (sleepPollResult.publishFreshDashboard) {
+                publishFreshDashboardNow = true;
+                break;
+            }
+
+            if (languageSelectionPending()) {
+                break;
             }
         }
     }

@@ -1032,26 +1032,12 @@ PollResult pollTelegramUpdates() {
     return pollResult;
 }
 
-//фу-ция загрузки дял .env
-void loadEnv(const std::string& filename = ".env") {
-    std::ifstream file(filename);
-    std::string line;
+void loadEnv() {
+    const char* token = std::getenv("BOT_TOKEN");
+    const char* chat_id = std::getenv("CHAT_ID");
 
-    while (std::getline(file, line)) {
-        if (line.empty() || line[0] == '#') continue;
-
-        size_t equalsPos = line.find('=');
-        if (equalsPos == std::string::npos) continue;
-
-        std::string key = line.substr(0, equalsPos);
-        std::string value = line.substr(equalsPos + 1);
-
-        if (key == "BOT_TOKEN") {
-            BOT_TOKEN = value;
-        } else if (key == "CHAT_ID") {
-            CHAT_ID = value;
-        }
-    }
+    if (token) BOT_TOKEN = token;
+    if (chat_id) CHAT_ID = chat_id;
 }
 
 
@@ -1059,7 +1045,7 @@ int main() {
     loadEnv();
 
     if (BOT_TOKEN.empty() || CHAT_ID.empty()) {
-        std::cerr << "Missing BOT_TOKEN or CHAT_ID in .env" << std::endl;
+        std::cerr << "Missing BOT_TOKEN or CHAT_ID in service environment" << std::endl;
         return 1;
     }
 
